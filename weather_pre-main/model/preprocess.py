@@ -1,64 +1,54 @@
-from input_target import input_target
-from data_loader import load_raw_data
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.preprocessing import OneHotEncoder
 import pandas as pd
-import numpy as np
-import os
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from input_target import input_target
 
+def get_preprocessing_pipeline(numeric_cols, categorical_cols):
+    """
+    Creates a professional Scikit-Learn pipeline for preprocessing.
+    """
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', MinMaxScaler())
+    ])
 
+    categorical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+    ])
 
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_cols),
+            ('cat', categorical_transformer, categorical_cols)
+        ])
+    
+    return preprocessor
 
 def preprocess():
-    df= load_raw_data()
-    
     train_inputs, train_target, val_inputs, val_target, test_inputs, test_target = input_target()
     
-    numeric_cols = train_inputs.select_dtypes(include=['number']).columns
-    categorical_cols = train_inputs.select_dtypes(include=['object', 'category']).columns
+    numeric_cols = train_inputs.select_dtypes(include=['number']).columns.tolist()
+    categorical_cols = train_inputs.select_dtypes(include=['object', 'category']).columns.tolist()
     
-    # Fill missing values for numeric columns with median{imputing}
+    preprocessor = get_preprocessing_pipeline(numeric_cols, categorical_cols)
     
-    imputer = SimpleImputer(strategy='median').fit(df[numeric_cols])
+    # Fit ONLY on training data to prevent data leakage
+    train_inputs_processed = preprocessor.fit_transform(train_inputs)
+    val_inputs_processed = preprocessor.transform(val_inputs)
+    test_inputs_processed = preprocessor.transform(test_inputs)
     
-    train_inputs[numeric_cols] = imputer.transform(train_inputs[numeric_cols])
-    val_inputs[numeric_cols] = imputer.transform(val_inputs[numeric_cols])
-    test_inputs[numeric_cols] = imputer.transform(test_inputs[numeric_cols])
-    
-    #scaling numeric cols
-    
-    scaler = MinMaxScaler().fit(df[numeric_cols])
-    
-    train_inputs[numeric_cols] = scaler.transform(train_inputs[numeric_cols])
-    val_inputs[numeric_cols]= scaler.transform(val_inputs[numeric_cols])
-    test_inputs[numeric_cols]= scaler.transform(test_inputs[numeric_cols])
-    
-    # dealing with categorical columns
-    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(df[categorical_cols])
-    
-    # Get encoded column names
-    encoded_cols = encoder.get_feature_names_out(categorical_cols)
+    # Get feature names for the encoded columns
+    cat_feature_names = preprocessor.named_transformers_['cat'].named_steps['encoder'].get_feature_names_out(categorical_cols)
+    all_feature_names = numeric_cols + list(cat_feature_names)
 
-# Transform categorical columns and create DataFrames
-    train_encoded = pd.DataFrame(encoder.transform(train_inputs[categorical_cols]),
-                             columns=encoded_cols, index=train_inputs.index)
-    val_encoded   = pd.DataFrame(encoder.transform(val_inputs[categorical_cols]),
-                             columns=encoded_cols, index=val_inputs.index)
-    test_encoded  = pd.DataFrame(encoder.transform(test_inputs[categorical_cols]),
-                             columns=encoded_cols, index=test_inputs.index)
+    # Convert back to DataFrames for easier handling
+    train_inputs = pd.DataFrame(train_inputs_processed, columns=all_feature_names)
+    val_inputs = pd.DataFrame(val_inputs_processed, columns=all_feature_names)
+    test_inputs = pd.DataFrame(test_inputs_processed, columns=all_feature_names)
 
-# Drop original categorical columns
-    train_inputs = train_inputs.drop(columns=categorical_cols)
-    val_inputs   = val_inputs.drop(columns=categorical_cols)
-    test_inputs  = test_inputs.drop(columns=categorical_cols)
-
-# Concatenate encoded columns
-    train_inputs = pd.concat([train_inputs, train_encoded], axis=1)
-    val_inputs   = pd.concat([val_inputs, val_encoded], axis=1)
-    test_inputs  = pd.concat([test_inputs, test_encoded], axis=1)
-
-    return train_inputs, val_inputs, test_inputs, imputer, scaler, encoder, numeric_cols, categorical_cols,encoded_cols
-
+    return train_inputs, train_target, val_inputs, val_target, test_inputs, test_target
 
 
